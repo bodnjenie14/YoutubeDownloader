@@ -151,6 +151,44 @@ public partial class DashboardViewModel : ViewModelBase
     private async Task ShowSettingsAsync() =>
         await _dialogManager.ShowDialogAsync(_viewModelManager.GetSettingsViewModel());
 
+    private static TimeSpan GetRetryDelay(int attempt) =>
+        attempt switch
+        {
+            1 => TimeSpan.FromSeconds(10),
+            2 => TimeSpan.FromSeconds(30),
+            3 => TimeSpan.FromMinutes(1),
+            4 => TimeSpan.FromMinutes(2),
+            _ => TimeSpan.FromMinutes(5),
+        };
+
+    private async Task DownloadOnceAsync(DownloadViewModel download, IProgress<Percentage> progress)
+    {
+        using var downloader = new VideoDownloader(_settingsService.LastAuthCookies);
+
+        using var access = await _downloadSemaphore.AcquireAsync(download.CancellationToken);
+
+        download.Status = DownloadStatus.Started;
+
+        var downloadOption =
+            download.DownloadOption
+            ?? await downloader.GetBestDownloadOptionAsync(
+                download.Video!.Id,
+                download.DownloadPreference!,
+                _settingsService.ShouldInjectLanguageSpecificAudioStreams,
+                download.CancellationToken
+            );
+
+        await downloader.DownloadVideoAsync(
+            download.FilePath!,
+            download.Video!,
+            downloadOption,
+            _settingsService.ShouldInjectSubtitles,
+            _settingsService.FFmpegFilePath,
+            download.Progress.Merge(progress),
+            download.CancellationToken
+        );
+    }
+
     private async void EnqueueDownload(DownloadViewModel download, int position = 0)
     {
         Downloads.Insert(position, download);
@@ -158,31 +196,30 @@ public partial class DashboardViewModel : ViewModelBase
 
         try
         {
-            using var downloader = new VideoDownloader(_settingsService.LastAuthCookies);
+            for (var attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    await DownloadOnceAsync(download, progress);
+                    break;
+                }
+                catch (Exception ex)
+                    when (ex
+                            is not OperationCanceledException
+                                and not VideoUnavailableException
+                                and not VideoRequiresPurchaseException
+                        && attempt <= _settingsService.AutoRetryLimit
+                    )
+                {
+                    download.Status = DownloadStatus.Enqueued;
+                    download.ErrorMessage =
+                        $"Retry {attempt}/{_settingsService.AutoRetryLimit}: {(ex is YoutubeExplodeException ? ex.Message : ex.ToString())}";
+
+                    await Task.Delay(GetRetryDelay(attempt), download.CancellationToken);
+                }
+            }
+
             var tagInjector = new MediaTagInjector();
-
-            using var access = await _downloadSemaphore.AcquireAsync(download.CancellationToken);
-
-            download.Status = DownloadStatus.Started;
-
-            var downloadOption =
-                download.DownloadOption
-                ?? await downloader.GetBestDownloadOptionAsync(
-                    download.Video!.Id,
-                    download.DownloadPreference!,
-                    _settingsService.ShouldInjectLanguageSpecificAudioStreams,
-                    download.CancellationToken
-                );
-
-            await downloader.DownloadVideoAsync(
-                download.FilePath!,
-                download.Video!,
-                downloadOption,
-                _settingsService.ShouldInjectSubtitles,
-                _settingsService.FFmpegFilePath,
-                download.Progress.Merge(progress),
-                download.CancellationToken
-            );
 
             if (_settingsService.ShouldInjectTags)
             {
@@ -200,6 +237,7 @@ public partial class DashboardViewModel : ViewModelBase
                 }
             }
 
+            download.ErrorMessage = null;
             download.Status = DownloadStatus.Completed;
         }
         catch (Exception ex)

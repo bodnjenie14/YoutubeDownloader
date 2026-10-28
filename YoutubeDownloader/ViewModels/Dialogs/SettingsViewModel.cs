@@ -105,6 +105,12 @@ public partial class SettingsViewModel : DialogViewModelBase
         set => _settingsService.ParallelLimit = Math.Clamp(value, 1, 10);
     }
 
+    public int AutoRetryLimit
+    {
+        get => _settingsService.AutoRetryLimit;
+        set => _settingsService.AutoRetryLimit = Math.Clamp(value, 0, 20);
+    }
+
     [RelayCommand]
     private async Task BrowseFFmpegFilePathAsync()
     {

@@ -130,6 +130,8 @@ public partial class LocalizationManager
     public string FileNameTemplateTooltip => Get();
     public string ParallelLimitLabel => Get();
     public string ParallelLimitTooltip => Get();
+    public string AutoRetryLimitLabel => Get();
+    public string AutoRetryLimitTooltip => Get();
     public string FFmpegPathLabel => Get();
     public string FFmpegPathTooltip => Get();
     public string FFmpegPathPlaceholderText => Get();

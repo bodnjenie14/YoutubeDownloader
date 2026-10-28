@@ -194,6 +194,27 @@
                                 Value="{Binding ParallelLimit}" />
                         </StackPanel>
                     </DockPanel>
+
+                    <!--  Auto-retry  -->
+                    <DockPanel
+                        Margin="16,8"
+                        LastChildFill="False"
+                        ToolTip.Tip="{Binding LocalizationManager.AutoRetryLimitTooltip}">
+                        <TextBlock DockPanel.Dock="Left" Text="{Binding LocalizationManager.AutoRetryLimitLabel}" />
+                        <StackPanel
+                            DockPanel.Dock="Right"
+                            Orientation="Horizontal"
+                            Spacing="10">
+                            <TextBlock Text="{Binding AutoRetryLimit}" />
+                            <Slider
+                                Width="150"
+                                IsSnapToTickEnabled="True"
+                                Maximum="20"
+                                Minimum="0"
+                                TickFrequency="1"
+                                Value="{Binding AutoRetryLimit}" />
+                        </StackPanel>
+                    </DockPanel>
                 </StackPanel>
             </ScrollViewer>
         </Border>
