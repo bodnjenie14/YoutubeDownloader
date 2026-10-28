@@ -416,6 +416,16 @@ public partial class DashboardViewModel : ViewModelBase
     }
 
     [RelayCommand]
+    private void RetryAllDownloads()
+    {
+        foreach (var download in Downloads.ToArray())
+        {
+            if (download.Status is DownloadStatus.Failed or DownloadStatus.Canceled)
+                RestartDownload(download);
+        }
+    }
+
+    [RelayCommand]
     private void CancelAllDownloads()
     {
         foreach (var download in Downloads)

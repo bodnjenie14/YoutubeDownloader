@@ -13,6 +13,7 @@ public partial class LocalizationManager
                 "Any valid YouTube URL or ID is accepted. Prepend a question mark (?) to perform search by text.",
             [nameof(ProcessQueryTooltip)] = "Process query (Enter)",
             [nameof(AuthTooltip)] = "Authentication",
+            [nameof(RetryAllTooltip)] = "Retry all failed and canceled downloads",
             [nameof(SettingsTooltip)] = "Settings",
             [nameof(DashboardPlaceholder)] = """
                 Copy-paste a **URL** or enter a **search query** to start downloading

@@ -34,6 +34,8 @@ public class AuthSetupViewModel : DialogViewModelBase
 
     public LocalizationManager LocalizationManager { get; }
 
+    public bool IsAuthPersisted => _settingsService.IsAuthPersisted;
+
     public IReadOnlyList<Cookie>? Cookies
     {
         get => _settingsService.LastAuthCookies;

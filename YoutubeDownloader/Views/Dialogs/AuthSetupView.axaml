@@ -72,6 +72,7 @@
                     IsVisible="{Binding !IsAuthenticated}"
                     EnvironmentRequested="WebBrowser_OnEnvironmentRequested"
                     Loaded="WebBrowser_OnLoaded"
+                    Unloaded="WebBrowser_OnUnloaded"
                     NavigationStarted="WebBrowser_OnNavigationStarted" />
             </Panel>
         </Border>

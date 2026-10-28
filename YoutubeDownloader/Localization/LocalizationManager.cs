@@ -88,6 +88,7 @@ public partial class LocalizationManager
     public string QueryTooltip => Get();
     public string ProcessQueryTooltip => Get();
     public string AuthTooltip => Get();
+    public string RetryAllTooltip => Get();
     public string SettingsTooltip => Get();
     public string DashboardPlaceholder => Get();
     public string DownloadsFileColumnHeader => Get();
