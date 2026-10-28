@@ -16,7 +16,10 @@ public record VideoDownloadPreference(
         if (PreferredContainer.IsAudioOnly)
             return options.FirstOrDefault(o => o.Container == PreferredContainer);
 
-        var orderedOptions = options.OrderBy(o => o.VideoQuality).ToArray();
+        var orderedOptions = options
+            .Where(o => !o.IsAudioOnly)
+            .OrderBy(o => o.VideoQuality)
+            .ToArray();
 
         var preferredOption = PreferredVideoQuality switch
         {
