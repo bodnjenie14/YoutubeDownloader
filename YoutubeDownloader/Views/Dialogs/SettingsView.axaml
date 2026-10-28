@@ -159,6 +159,15 @@
                         <ToggleSwitch DockPanel.Dock="Right" IsChecked="{Binding ShouldSkipExistingFiles}" />
                     </DockPanel>
 
+                    <!--  Compact for Apple devices  -->
+                    <DockPanel
+                        Margin="16,8"
+                        LastChildFill="False"
+                        ToolTip.Tip="{Binding LocalizationManager.CompactForAppleTooltip}">
+                        <TextBlock DockPanel.Dock="Left" Text="{Binding LocalizationManager.CompactForAppleLabel}" />
+                        <ToggleSwitch DockPanel.Dock="Right" IsChecked="{Binding ShouldCompactForApple}" />
+                    </DockPanel>
+
                     <!--  File name template  -->
                     <DockPanel Margin="16,8" LastChildFill="False">
                         <ToolTip.Tip>

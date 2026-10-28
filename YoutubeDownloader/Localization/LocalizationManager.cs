@@ -126,6 +126,8 @@ public partial class LocalizationManager
     public string InjectTagsTooltip => Get();
     public string SkipExistingFilesLabel => Get();
     public string SkipExistingFilesTooltip => Get();
+    public string CompactForAppleLabel => Get();
+    public string CompactForAppleTooltip => Get();
     public string FileNameTemplateLabel => Get();
     public string FileNameTemplateTooltip => Get();
     public string ParallelLimitLabel => Get();

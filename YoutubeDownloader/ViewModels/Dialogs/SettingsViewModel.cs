@@ -93,6 +93,12 @@ public partial class SettingsViewModel : DialogViewModelBase
         set => _settingsService.ShouldSkipExistingFiles = value;
     }
 
+    public bool ShouldCompactForApple
+    {
+        get => _settingsService.ShouldCompactForApple;
+        set => _settingsService.ShouldCompactForApple = value;
+    }
+
     public string FileNameTemplate
     {
         get => _settingsService.FileNameTemplate;

@@ -45,6 +45,9 @@ public partial class SettingsService()
     public partial bool ShouldSkipExistingFiles { get; set; }
 
     [ObservableProperty]
+    public partial bool ShouldCompactForApple { get; set; }
+
+    [ObservableProperty]
     public partial string FileNameTemplate { get; set; } = "$title";
 
     [ObservableProperty]

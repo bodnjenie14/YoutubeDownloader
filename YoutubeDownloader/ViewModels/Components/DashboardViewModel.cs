@@ -17,6 +17,7 @@ using YoutubeDownloader.Framework;
 using YoutubeDownloader.Localization;
 using YoutubeDownloader.Services;
 using YoutubeExplode.Exceptions;
+using YoutubeExplode.Videos.Streams;
 
 namespace YoutubeDownloader.ViewModels.Components;
 
@@ -161,7 +162,10 @@ public partial class DashboardViewModel : ViewModelBase
             _ => TimeSpan.FromMinutes(5),
         };
 
-    private async Task DownloadOnceAsync(DownloadViewModel download, IProgress<Percentage> progress)
+    private async Task<VideoDownloadOption> DownloadOnceAsync(
+        DownloadViewModel download,
+        IProgress<Percentage> progress
+    )
     {
         using var downloader = new VideoDownloader(_settingsService.LastAuthCookies);
 
@@ -187,6 +191,8 @@ public partial class DashboardViewModel : ViewModelBase
             download.Progress.Merge(progress),
             download.CancellationToken
         );
+
+        return downloadOption;
     }
 
     private async void EnqueueDownload(DownloadViewModel download, int position = 0)
@@ -196,11 +202,12 @@ public partial class DashboardViewModel : ViewModelBase
 
         try
         {
+            VideoDownloadOption downloadOption;
             for (var attempt = 1; ; attempt++)
             {
                 try
                 {
-                    await DownloadOnceAsync(download, progress);
+                    downloadOption = await DownloadOnceAsync(download, progress);
                     break;
                 }
                 catch (Exception ex)
@@ -217,6 +224,20 @@ public partial class DashboardViewModel : ViewModelBase
 
                     await Task.Delay(GetRetryDelay(attempt), download.CancellationToken);
                 }
+            }
+
+            if (_settingsService.ShouldCompactForApple && downloadOption.Container == Container.Mp4)
+            {
+                try
+                {
+                    await MediaCompactor.CompactForAppleAsync(
+                        download.FilePath!,
+                        downloadOption.VideoQuality?.MaxHeight >= 360,
+                        _settingsService.FFmpegFilePath,
+                        download.CancellationToken
+                    );
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException) { }
             }
 
             var tagInjector = new MediaTagInjector();

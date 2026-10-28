@@ -61,6 +61,9 @@ public partial class LocalizationManager
             [nameof(SkipExistingFilesLabel)] = "Skip existing files",
             [nameof(SkipExistingFilesTooltip)] =
                 "When downloading multiple videos, skip those that already have matching files in the output directory",
+            [nameof(CompactForAppleLabel)] = "Compact for Apple devices",
+            [nameof(CompactForAppleTooltip)] =
+                "Shrink MP4 downloads by re-encoding audio to 64 kbps AAC and video at 360p or higher to HEVC, in a format that plays on iPhone, iPad and Mac (takes extra time after each download)",
             [nameof(FileNameTemplateLabel)] = "File name template",
             [nameof(FileNameTemplateTooltip)] = """
                 Template used for generating file names for downloaded videos.
