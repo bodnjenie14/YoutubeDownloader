@@ -41,6 +41,7 @@ const string Usage = """
       --retries N                                 (default: 10)
       --history F   .txt of watched video links, used by a channels list
       --extra N     newest uploads to add per channel (default: 10)
+      --max-minutes N  skip videos longer than N minutes (they stay listed in the XML)
       --dry-run     only show what would be downloaded
       --dubs        include auto-dubbed audio tracks (much bigger files)
       --no-subs     don't embed subtitles
@@ -65,6 +66,7 @@ var container = Container.Mp4;
 var parallelLimit = 2;
 var retryLimit = 10;
 var extraCount = 10;
+TimeSpan? maxDuration = null;
 string? historyFilePath = null;
 var isDryRun = false;
 var shouldIncludeDubs = false;
@@ -102,6 +104,9 @@ for (var i = 2; i < args.Length; i++)
             break;
         case "--history":
             historyFilePath = Next().Trim('"');
+            break;
+        case "--max-minutes":
+            maxDuration = TimeSpan.FromMinutes(int.Parse(Next()));
             break;
         case "--extra":
             extraCount = Math.Clamp(int.Parse(Next()), 0, 500);
@@ -345,6 +350,19 @@ async Task<int> DownloadListAsync(
         parentDirPath,
         Path.EscapeFileName((folderName ?? title).Trim())
     );
+
+    // Long videos stay listed in the XML, just without a file
+    if (maxDuration is { } limit)
+    {
+        var skippedLongCount = items.Count(i => i.Video?.Duration > limit);
+        if (skippedLongCount > 0)
+        {
+            Console.WriteLine(
+                $"'{title}': skipping {skippedLongCount} videos longer than {limit.TotalMinutes:F0} minutes"
+            );
+            items = items.Where(i => !(i.Video?.Duration > limit)).ToArray();
+        }
+    }
 
     // Pick file names up front so they're stable between runs
     var usedFileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
