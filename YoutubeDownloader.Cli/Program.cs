@@ -620,6 +620,126 @@ Func<string, IReadOnlyDictionary<string, string>, Task> WriteXml(
             filePaths
         );
 
+// Channel pictures for every channel referenced in the library's XMLs
+if (string.Equals(input, "avatars", StringComparison.OrdinalIgnoreCase))
+{
+    var avatarsDirPath = Path.Combine(parentDirPath, "avatars");
+    Directory.CreateDirectory(avatarsDirPath);
+
+    var channelIds = new HashSet<string>(StringComparer.Ordinal);
+    var channelFolders = new List<(string ChannelId, string DirPath)>();
+
+    foreach (
+        var xmlFilePath in Directory.EnumerateFiles(
+            parentDirPath,
+            "*.xml",
+            SearchOption.AllDirectories
+        )
+    )
+    {
+        if (xmlFilePath.StartsWith(avatarsDirPath, StringComparison.OrdinalIgnoreCase))
+            continue;
+
+        XDocument document;
+        try
+        {
+            document = XDocument.Load(xmlFilePath);
+        }
+        catch
+        {
+            continue;
+        }
+
+        // Channel and subscriber folders use the channel ID as the list ID
+        if (
+            (string?)document.Root?.Attribute("Id") is { } listId
+            && ChannelId.TryParse(listId) is not null
+        )
+        {
+            channelIds.Add(listId);
+            channelFolders.Add((listId, Path.GetDirectoryName(xmlFilePath)!));
+        }
+
+        foreach (var author in document.Descendants("Author"))
+        {
+            if ((string?)author.Attribute("ChannelId") is { Length: > 0 } channelId)
+                channelIds.Add(channelId);
+        }
+    }
+
+    Console.WriteLine(
+        $"{channelIds.Count} channels referenced, {channelFolders.Count} channel folders"
+    );
+
+    using var youtube = new YoutubeClient();
+    using var avatarGate = new SemaphoreSlim(4);
+    var channels = new List<Channel>();
+    var channelsLock = new Lock();
+    var downloadedCount = 0;
+
+    await Task.WhenAll(
+        channelIds.Select(async channelId =>
+        {
+            await avatarGate.WaitAsync();
+            try
+            {
+                var channel = await youtube.Channels.GetAsync(channelId);
+                lock (channelsLock)
+                    channels.Add(channel);
+
+                var avatarFilePath = Path.Combine(avatarsDirPath, $"{channelId}.jpg");
+                if (File.Exists(avatarFilePath) && new FileInfo(avatarFilePath).Length > 0)
+                    return;
+
+                if (channel.Thumbnails.TryGetWithHighestResolution() is not { } thumbnail)
+                    return;
+
+                var bytes = await YoutubeDownloader.Core.Utils.Http.Client.GetByteArrayAsync(
+                    thumbnail.Url
+                );
+                await File.WriteAllBytesAsync(avatarFilePath, bytes);
+                Interlocked.Increment(ref downloadedCount);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Skipping {channelId}: {ex.Message.Split('\n')[0]}");
+            }
+            finally
+            {
+                avatarGate.Release();
+            }
+        })
+    );
+
+    foreach (var (channelId, dirPath) in channelFolders)
+    {
+        var avatarFilePath = Path.Combine(avatarsDirPath, $"{channelId}.jpg");
+        if (File.Exists(avatarFilePath))
+            File.Copy(avatarFilePath, Path.Combine(dirPath, "folder.jpg"), true);
+    }
+
+    new XDocument(
+        new XDeclaration("1.0", "utf-8", null),
+        new XElement(
+            "Channels",
+            channels
+                .OrderBy(c => c.Title, StringComparer.OrdinalIgnoreCase)
+                .Select(c => new XElement(
+                    "Channel",
+                    new XAttribute("Id", c.Id.Value),
+                    new XAttribute("Url", c.Url),
+                    new XElement("Title", c.Title),
+                    new XElement("Avatar", $"{c.Id}.jpg")
+                ))
+        )
+    ).Save(Path.Combine(avatarsDirPath, "channels.xml"));
+
+    Console.WriteLine(
+        $"Saved {downloadedCount} new channel pictures to {avatarsDirPath}, folder.jpg in {channelFolders.Count} folders"
+    );
+    return 0;
+}
+
 var inputLines = File.Exists(input) ? File.ReadAllLines(input) : [];
 var isChannelsList = inputLines.Any(l => Regex.IsMatch(l.Trim(), @"^#\d+$"));
 var mostWatchedHeader = inputLines
