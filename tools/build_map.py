@@ -1,5 +1,9 @@
 """Builds map.xml and map.csv at the root of an offline library.
 
+It is meant to be served as-is by a file server: every path is relative to the
+root with forward slashes, and each video is listed once (with its size) so a
+client can download it once however many lists it is in.
+
 The library root holds one folder per section (playlists, channels, history,
 subscribers), each with one folder per list containing the list's XML and videos.
 Channel pictures, if present, live in avatars/ (see the CLI's avatars command).
@@ -115,6 +119,7 @@ def main():
         attributes = {"Id": video_id, "ChannelId": video["channel_id"], "Duration": video["duration"]}
         if video["file"]:
             attributes["File"] = video["file"]
+            attributes["Bytes"] = str(os.path.getsize(os.path.join(root, video["file"])))
         avatar = os.path.join(avatars_dir, f"{video['channel_id']}.jpg")
         if video["channel_id"] and os.path.isfile(avatar):
             attributes["ChannelPicture"] = relative(avatar, root)
@@ -127,6 +132,8 @@ def main():
 
     library.set("Videos", str(len(videos)))
     library.set("Downloaded", str(sum(1 for v in videos.values() if v["file"])))
+    # What a client needs to fetch everything once (each video stored once, however many lists it is in)
+    library.set("Bytes", str(sum(os.path.getsize(os.path.join(root, v["file"])) for v in videos.values() if v["file"])))
 
     ET.indent(library)
     ET.ElementTree(library).write(os.path.join(root, "map.xml"), encoding="utf-8", xml_declaration=True)
