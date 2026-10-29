@@ -155,9 +155,19 @@ void Log(string message, ConsoleColor? color = null)
 static string NormalizeName(string name) =>
     Regex.Replace(name.Replace('’', '\'').Replace('–', '-'), @"\s+", " ").Trim();
 
+// Finds video links anywhere in a line, so Markdown and other exports work too
 static IReadOnlyList<VideoId> ReadVideoIds(string filePath) =>
     File.ReadAllLines(filePath)
-        .Select(l => VideoId.TryParse(l.Trim()))
+        .SelectMany(l =>
+            Regex
+                .Matches(
+                    l,
+                    @"(?:youtube\.com/(?:shorts/|live/|embed/)|youtu\.be/|[?&]v=)([A-Za-z0-9_-]{11})"
+                )
+                .Select(m => m.Groups[1].Value)
+                .DefaultIfEmpty(l.Trim())
+        )
+        .Select(s => VideoId.TryParse(s))
         .OfType<VideoId>()
         .DistinctBy(id => id.Value)
         .ToArray();
@@ -713,38 +723,41 @@ async Task<IReadOnlyList<IVideo>> GetNewestUploadsAsync(
         .ToArray();
 }
 
-async Task<IVideo?> FindChannelVideoAsync(YoutubeClient youtube, Channel channel, string title)
+static string[] GetTitleWords(string title) =>
+    Regex.Split(title.ToLowerInvariant(), @"[^\p{L}\p{N}]+").Where(w => w.Length > 0).ToArray();
+
+// Exact title, then prefix, then "every word of the given title appears in the video title"
+// (lists often shorten titles or drop a middle section)
+static IVideo? MatchTitle(IEnumerable<IVideo> candidates, string title)
 {
     var key = NormalizeTitle(title);
+    var words = GetTitleWords(title);
+    var list = candidates.ToArray();
 
+    return list.FirstOrDefault(v => NormalizeTitle(v.Title) == key)
+        ?? list.FirstOrDefault(v =>
+            NormalizeTitle(v.Title).StartsWith(key, StringComparison.Ordinal)
+            || key.StartsWith(NormalizeTitle(v.Title), StringComparison.Ordinal)
+        )
+        ?? (
+            words.Length >= 3
+                ? list.FirstOrDefault(v => !words.Except(GetTitleWords(v.Title)).Any())
+                : null
+        );
+}
+
+async Task<IVideo?> FindChannelVideoAsync(YoutubeClient youtube, Channel channel, string title)
+{
     var results = await youtube.Search.GetVideosAsync($"{title} {channel.Title}").CollectAsync(30);
 
-    var match =
-        results.FirstOrDefault(v =>
-            v.Author.ChannelId == channel.Id && NormalizeTitle(v.Title) == key
-        )
-        ?? results.FirstOrDefault(v =>
-            v.Author.ChannelId == channel.Id
-            && (
-                NormalizeTitle(v.Title).StartsWith(key, StringComparison.Ordinal)
-                || key.StartsWith(NormalizeTitle(v.Title), StringComparison.Ordinal)
-            )
-        );
-
-    if (match is not null)
+    if (MatchTitle(results.Where(v => v.Author.ChannelId == channel.Id), title) is { } match)
         return match;
 
-    var scannedCount = 0;
+    var uploads = new List<IVideo>();
     await foreach (var upload in youtube.Channels.GetUploadsAsync(channel.Id))
-    {
-        if (NormalizeTitle(upload.Title) == key)
-            return upload;
+        uploads.Add(upload);
 
-        if (++scannedCount >= 1000)
-            break;
-    }
-
-    return null;
+    return MatchTitle(uploads, title);
 }
 
 // Top subscriptions list: each channel's most popular video and Short, added to its channel folder
@@ -952,7 +965,13 @@ if (isChannelsList)
 }
 
 // Plain list of video links: a playlist named after the file
-if (File.Exists(input) && input.EndsWith(".txt", StringComparison.OrdinalIgnoreCase))
+if (
+    File.Exists(input)
+    && (
+        input.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)
+        || input.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
+    )
+)
 {
     var title = Path.GetFileNameWithoutExtension(input);
     var videos = await GetVideosAsync(ReadVideoIds(input));
