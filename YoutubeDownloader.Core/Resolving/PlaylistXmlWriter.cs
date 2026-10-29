@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Xml.Linq;
 using PowerKit.Extensions;
+using YoutubeExplode.Videos;
 
 namespace YoutubeDownloader.Core.Resolving;
 
@@ -14,9 +15,30 @@ public static class PlaylistXmlWriter
     public static string GetFileName(ResolvedPlaylist playlist) =>
         Path.EscapeFileName(playlist.Playlist.Title.Trim()) + ".xml";
 
-    public static async Task WriteAsync(
+    public static Task WriteAsync(
         string filePath,
         ResolvedPlaylist playlist,
+        IReadOnlyDictionary<string, string>? videoFilePaths = null,
+        CancellationToken cancellationToken = default
+    ) =>
+        WriteAsync(
+            filePath,
+            playlist.Playlist.Id.Value,
+            playlist.Playlist.Url,
+            playlist.Playlist.Title,
+            playlist.Playlist.Author?.ChannelTitle ?? "",
+            playlist.Videos,
+            videoFilePaths,
+            cancellationToken
+        );
+
+    public static async Task WriteAsync(
+        string filePath,
+        string id,
+        string url,
+        string title,
+        string author,
+        IReadOnlyList<IVideo> videos,
         IReadOnlyDictionary<string, string>? videoFilePaths = null,
         CancellationToken cancellationToken = default
     )
@@ -25,15 +47,15 @@ public static class PlaylistXmlWriter
             new XDeclaration("1.0", "utf-8", null),
             new XElement(
                 "Playlist",
-                new XAttribute("Id", playlist.Playlist.Id.Value),
-                new XAttribute("Url", playlist.Playlist.Url),
-                new XAttribute("Count", playlist.Videos.Count),
+                new XAttribute("Id", id),
+                new XAttribute("Url", url),
+                new XAttribute("Count", videos.Count),
                 new XAttribute("SavedAt", DateTimeOffset.Now.ToString("o")),
-                new XElement("Title", playlist.Playlist.Title),
-                new XElement("Author", playlist.Playlist.Author?.ChannelTitle ?? ""),
+                new XElement("Title", title),
+                new XElement("Author", author),
                 new XElement(
                     "Videos",
-                    playlist.Videos.Select(
+                    videos.Select(
                         (video, i) =>
                             new XElement(
                                 "Video",
