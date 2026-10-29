@@ -93,7 +93,11 @@ public partial class DownloadMultipleSetupViewModel(
                 )
             );
 
-            if (settingsService.ShouldSkipExistingFiles && File.Exists(baseFilePath))
+            if (
+                settingsService.ShouldSkipExistingFiles
+                && File.Exists(baseFilePath)
+                && new FileInfo(baseFilePath).Length > 0
+            )
             {
                 videoFilePaths[video.Id.Value] = baseFilePath;
                 continue;

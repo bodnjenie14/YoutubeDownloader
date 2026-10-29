@@ -29,6 +29,7 @@ public partial class LocalizationManager
             [nameof(DownloadStatusCompleted)] = "Done",
             [nameof(DownloadStatusCanceled)] = "Canceled",
             [nameof(DownloadStatusFailed)] = "Failed",
+            [nameof(DownloadStatusRetrying)] = "Retrying...",
             [nameof(ClickToCopyErrorTooltip)] = "Note: Click to copy this error message",
             [nameof(ShowFileTooltip)] = "Show file",
             [nameof(PlayTooltip)] = "Play",

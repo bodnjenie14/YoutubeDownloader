@@ -33,6 +33,9 @@ public partial class DashboardViewModel : ViewModelBase
     private readonly ResizableSemaphore _downloadSemaphore = new();
     private readonly AutoResetProgressMuxer _progressMuxer;
 
+    private DateTimeOffset _cooldownUntil = DateTimeOffset.MinValue;
+    private int _consecutiveFailureCount;
+
     public DashboardViewModel(
         ViewModelManager viewModelManager,
         SnackbarManager snackbarManager,
@@ -152,8 +155,8 @@ public partial class DashboardViewModel : ViewModelBase
     private async Task ShowSettingsAsync() =>
         await _dialogManager.ShowDialogAsync(_viewModelManager.GetSettingsViewModel());
 
-    private static TimeSpan GetRetryDelay(int attempt) =>
-        attempt switch
+    private static TimeSpan GetRetryDelay(int failureCount) =>
+        failureCount switch
         {
             1 => TimeSpan.FromSeconds(10),
             2 => TimeSpan.FromSeconds(30),
@@ -170,6 +173,11 @@ public partial class DashboardViewModel : ViewModelBase
         using var downloader = new VideoDownloader(_settingsService.LastAuthCookies);
 
         using var access = await _downloadSemaphore.AcquireAsync(download.CancellationToken);
+
+        while (_cooldownUntil > DateTimeOffset.Now)
+            await Task.Delay(_cooldownUntil - DateTimeOffset.Now, download.CancellationToken);
+
+        await Task.Delay(Random.Shared.Next(1000, 2500), download.CancellationToken);
 
         download.Status = DownloadStatus.Started;
 
@@ -208,6 +216,7 @@ public partial class DashboardViewModel : ViewModelBase
                 try
                 {
                     downloadOption = await DownloadOnceAsync(download, progress);
+                    _consecutiveFailureCount = 0;
                     break;
                 }
                 catch (Exception ex)
@@ -218,11 +227,20 @@ public partial class DashboardViewModel : ViewModelBase
                         && attempt <= _settingsService.AutoRetryLimit
                     )
                 {
-                    download.Status = DownloadStatus.Enqueued;
-                    download.ErrorMessage =
-                        $"Retry {attempt}/{_settingsService.AutoRetryLimit}: {(ex is YoutubeExplodeException ? ex.Message : ex.ToString())}";
+                    _consecutiveFailureCount++;
 
-                    await Task.Delay(GetRetryDelay(attempt), download.CancellationToken);
+                    var cooldownUntil =
+                        DateTimeOffset.Now + GetRetryDelay(_consecutiveFailureCount);
+                    if (cooldownUntil > _cooldownUntil)
+                        _cooldownUntil = cooldownUntil;
+
+                    var delay = _cooldownUntil - DateTimeOffset.Now;
+
+                    download.Status = DownloadStatus.Retrying;
+                    download.ErrorMessage =
+                        $"Retry {attempt}/{_settingsService.AutoRetryLimit} in {delay.TotalSeconds:F0}s (all downloads paused): {(ex is YoutubeExplodeException ? ex.Message : ex.ToString())}";
+
+                    await Task.Delay(delay, download.CancellationToken);
                 }
             }
 

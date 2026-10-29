@@ -79,7 +79,8 @@ public partial class DownloadViewModel : ViewModelBase
 
     public bool IsCanceledOrFailed => Status is DownloadStatus.Canceled or DownloadStatus.Failed;
 
-    private bool CanCancel() => Status is DownloadStatus.Enqueued or DownloadStatus.Started;
+    private bool CanCancel() =>
+        Status is DownloadStatus.Enqueued or DownloadStatus.Started or DownloadStatus.Retrying;
 
     [RelayCommand(CanExecute = nameof(CanCancel))]
     private void Cancel()

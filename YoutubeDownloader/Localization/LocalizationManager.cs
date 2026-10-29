@@ -101,6 +101,7 @@ public partial class LocalizationManager
     public string DownloadStatusCompleted => Get();
     public string DownloadStatusCanceled => Get();
     public string DownloadStatusFailed => Get();
+    public string DownloadStatusRetrying => Get();
     public string ClickToCopyErrorTooltip => Get();
     public string ShowFileTooltip => Get();
     public string PlayTooltip => Get();
