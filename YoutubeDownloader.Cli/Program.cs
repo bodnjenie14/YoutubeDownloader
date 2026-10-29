@@ -222,8 +222,10 @@ static TimeSpan GetRetryDelay(int failureCount) =>
         _ => TimeSpan.FromMinutes(5),
     };
 
+// Per-video hiccups that usually clear on a quick retry, unlike throttling
 static bool IsCipherError(Exception ex) =>
-    ex.Message.Contains("cipher manifest", StringComparison.OrdinalIgnoreCase);
+    ex is VideoUnplayableException and not VideoUnavailableException
+    || ex.Message.Contains("cipher manifest", StringComparison.OrdinalIgnoreCase);
 
 static string? FindYtDlp()
 {
