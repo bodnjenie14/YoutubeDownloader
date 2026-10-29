@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Threading;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -32,6 +34,8 @@ public partial class DashboardViewModel : ViewModelBase
     private readonly IDisposable _eventSubscription;
     private readonly ResizableSemaphore _downloadSemaphore = new();
     private readonly AutoResetProgressMuxer _progressMuxer;
+
+    private static readonly TimeSpan StallTimeout = TimeSpan.FromSeconds(90);
 
     private DateTimeOffset _cooldownUntil = DateTimeOffset.MinValue;
     private int _consecutiveFailureCount;
@@ -190,15 +194,50 @@ public partial class DashboardViewModel : ViewModelBase
                 download.CancellationToken
             );
 
-        await downloader.DownloadVideoAsync(
-            download.FilePath!,
-            download.Video!,
-            downloadOption,
-            _settingsService.ShouldInjectSubtitles,
-            _settingsService.FFmpegFilePath,
-            download.Progress.Merge(progress),
+        using var stallCts = CancellationTokenSource.CreateLinkedTokenSource(
             download.CancellationToken
         );
+
+        var lastActivity = new StrongBox<long>(Environment.TickCount64);
+        var downloadProgress = download.Progress.Merge(progress);
+
+        using var stallTimer = new Timer(
+            _ =>
+            {
+                if (
+                    Environment.TickCount64 - Volatile.Read(ref lastActivity.Value)
+                    > StallTimeout.TotalMilliseconds
+                )
+                    stallCts.Cancel();
+            },
+            null,
+            TimeSpan.FromSeconds(5),
+            TimeSpan.FromSeconds(5)
+        );
+
+        try
+        {
+            await downloader.DownloadVideoAsync(
+                download.FilePath!,
+                download.Video!,
+                downloadOption,
+                _settingsService.ShouldInjectSubtitles,
+                _settingsService.FFmpegFilePath,
+                new Gress.DelegateProgress<Percentage>(p =>
+                {
+                    Volatile.Write(ref lastActivity.Value, Environment.TickCount64);
+                    downloadProgress.Report(p);
+                }),
+                stallCts.Token
+            );
+        }
+        catch (OperationCanceledException)
+            when (!download.CancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"Download stalled: no data received for {StallTimeout.TotalSeconds:F0} seconds."
+            );
+        }
 
         return downloadOption;
     }
