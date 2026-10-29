@@ -1118,7 +1118,19 @@ if (isChannelsList)
             continue;
         }
 
-        var extras = await GetNewestUploadsAsync(youtube, resolvedChannelId, watched, extraCount);
+        IReadOnlyList<IVideo> extras;
+        try
+        {
+            extras = await GetNewestUploadsAsync(youtube, resolvedChannelId, watched, extraCount);
+        }
+        catch (YoutubeExplodeException ex)
+        {
+            // Some channels' upload lists can't be read; still keep the watched videos
+            Console.WriteLine(
+                $"[{i + 1}/{channelNames.Length}] '{channelName}': couldn't read newest uploads ({ex.Message.Split('\n')[0].Trim()})"
+            );
+            extras = [];
+        }
 
         var videos = watched.Concat(extras).ToArray();
         Console.WriteLine(
