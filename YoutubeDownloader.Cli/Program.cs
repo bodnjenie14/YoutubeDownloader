@@ -740,14 +740,22 @@ if (isChannelsList)
         }
 
         var watchedIds = watched.Select(v => v.Id.Value).ToHashSet(StringComparer.Ordinal);
+        // Skip live streams, very long replays and re-uploads of the same title
+        var seenTitles = watched.Select(v => NormalizeTitle(v.Title)).ToHashSet();
         var extras =
             extraCount > 0
                 ? (
                     await youtube
                         .Channels.GetUploadsAsync(resolvedChannelId)
-                        .CollectAsync(extraCount + watched.Count)
+                        .CollectAsync(extraCount * 5 + watched.Count)
                 )
-                    .Where(v => !watchedIds.Contains(v.Id.Value))
+                    .Where(v =>
+                        !watchedIds.Contains(v.Id.Value)
+                        && v.Duration is { } duration
+                        && duration > TimeSpan.Zero
+                        && duration <= TimeSpan.FromHours(3)
+                        && seenTitles.Add(NormalizeTitle(v.Title))
+                    )
                     .Take(extraCount)
                     .Cast<IVideo>()
                     .ToArray()
