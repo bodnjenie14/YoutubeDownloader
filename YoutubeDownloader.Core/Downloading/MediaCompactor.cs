@@ -65,13 +65,13 @@ public static class MediaCompactor
 
         if (shouldEncodeVideo)
         {
-            yield return "-c:v";
+            yield return "-c:v:0";
             yield return "libx265";
             yield return "-crf";
             yield return "28";
             yield return "-preset";
             yield return "fast";
-            yield return "-tag:v";
+            yield return "-tag:v:0";
             yield return "hvc1";
         }
 
