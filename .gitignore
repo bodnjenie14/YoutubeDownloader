@@ -13,3 +13,6 @@ obj/
 
 # Test results
 TestResults/
+
+# Python
+__pycache__/

@@ -49,6 +49,7 @@ const string Usage = """
       --compact     shrink MP4 files for Apple devices (needs FFmpeg with libx265 for HEVC)
       --settings F  desktop app Settings.dat to read the saved login from
                     (default: ..\Settings.dat next to this tool)
+      --cookies F   cookies.txt exported from a signed-in browser (instead of --settings)
     """;
 
 Console.OutputEncoding = System.Text.Encoding.UTF8;
@@ -74,6 +75,7 @@ var shouldIncludeSubtitles = true;
 var shouldInjectTags = true;
 var shouldCompact = false;
 var settingsFilePath = Path.Combine(AppContext.BaseDirectory, "..", "Settings.dat");
+string? cookiesFilePath = null;
 
 for (var i = 2; i < args.Length; i++)
 {
@@ -129,6 +131,9 @@ for (var i = 2; i < args.Length; i++)
         case "--settings":
             settingsFilePath = Next().Trim('"');
             break;
+        case "--cookies":
+            cookiesFilePath = Next().Trim('"');
+            break;
         default:
             Console.WriteLine($"Unknown option '{args[i]}'.");
             Console.WriteLine(Usage);
@@ -136,7 +141,9 @@ for (var i = 2; i < args.Length; i++)
     }
 }
 
-var cookies = AppSettingsCookies.TryLoad(settingsFilePath);
+var cookies = cookiesFilePath is not null
+    ? AppSettingsCookies.LoadCookiesFile(cookiesFilePath)
+    : AppSettingsCookies.TryLoad(settingsFilePath);
 var ytDlpFilePath = FindYtDlp();
 var logLock = new Lock();
 string? logFilePath = null;
@@ -292,6 +299,8 @@ async Task<bool> TryDownloadWithYtDlpAsync(string videoId, string filePath)
             "--quiet",
             "--no-warnings",
             "--force-overwrites",
+            "--match-filter",
+            "!is_live",
             "-f",
             format,
             "--merge-output-format",
@@ -351,19 +360,6 @@ async Task<int> DownloadListAsync(
         Path.EscapeFileName((folderName ?? title).Trim())
     );
 
-    // Long videos stay listed in the XML, just without a file
-    if (maxDuration is { } limit)
-    {
-        var skippedLongCount = items.Count(i => i.Video?.Duration > limit);
-        if (skippedLongCount > 0)
-        {
-            Console.WriteLine(
-                $"'{title}': skipping {skippedLongCount} videos longer than {limit.TotalMinutes:F0} minutes"
-            );
-            items = items.Where(i => !(i.Video?.Duration > limit)).ToArray();
-        }
-    }
-
     // Pick file names up front so they're stable between runs
     var usedFileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     var filePaths = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -377,11 +373,52 @@ async Task<int> DownloadListAsync(
         filePaths[item.Id] = Path.Combine(outputDirPath, fileName);
     }
 
+    // Live streams never end, so they stay listed without a file
+    var liveItems = items.Where(i => i.Video is not null && i.Video.Duration is null).ToArray();
+    if (liveItems.Length > 0)
+    {
+        Console.WriteLine($"'{title}': skipping {liveItems.Length} live streams");
+        items = items.Except(liveItems).ToArray();
+        foreach (var item in liveItems)
+            filePaths.Remove(item.Id);
+    }
+
+    // Long videos stay listed in the XML, just without a file (unless downloaded earlier)
+    if (maxDuration is { } limit)
+    {
+        var skippedLong = items
+            .Where(i =>
+                i.Video?.Duration > limit
+                && !(File.Exists(filePaths[i.Id]) && new FileInfo(filePaths[i.Id]).Length > 0)
+            )
+            .ToArray();
+
+        if (skippedLong.Length > 0)
+        {
+            Console.WriteLine(
+                $"'{title}': skipping {skippedLong.Length} videos longer than {limit.TotalMinutes:F0} minutes"
+            );
+            items = items.Except(skippedLong).ToArray();
+            foreach (var item in skippedLong)
+                filePaths.Remove(item.Id);
+        }
+    }
+
     if (isDryRun)
     {
-        Console.WriteLine($"'{title}': {items.Count} videos -> {outputDirPath}");
-        foreach (var (i, item) in items.Index())
-            Console.WriteLine($"  {i + 1, 3}. {item.Title}");
+        // "new" lines are what a real run would download: id, minutes, title
+        var newItems = items
+            .Where(i => !(File.Exists(filePaths[i.Id]) && new FileInfo(filePaths[i.Id]).Length > 0))
+            .ToArray();
+        var newMinutes = newItems.Sum(i => i.Video?.Duration?.TotalMinutes ?? 0);
+
+        Console.WriteLine(
+            $"'{title}': {items.Count} videos, {newItems.Length} new ({newMinutes:F0} min) -> {outputDirPath}"
+        );
+        foreach (var item in newItems)
+            Console.WriteLine(
+                $"  new {item.Id} {item.Video?.Duration?.TotalMinutes ?? 0:F1} {item.Title}"
+            );
 
         return 0;
     }
@@ -1149,6 +1186,16 @@ if (File.Exists(input) && input.EndsWith(".xml", StringComparison.OrdinalIgnoreC
 
     using var resolver = new QueryResolver(cookies);
     var result = await resolver.ResolveAsync(input);
+
+    // A link that can't be opened (e.g. a private playlist) falls back to a search for its
+    // text, which would download unrelated videos
+    if (result.Kind == QueryResultKind.Search)
+    {
+        Console.WriteLine(
+            "Couldn't open this link (private or unavailable), so nothing was downloaded."
+        );
+        return 2;
+    }
 
     if (result.Videos.Count == 0)
     {

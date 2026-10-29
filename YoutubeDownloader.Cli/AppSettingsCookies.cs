@@ -82,4 +82,16 @@ internal static class AppSettingsCookies
             return null;
         }
     }
+
+    // Netscape cookies.txt, as exported by browser extensions or yt-dlp
+    public static IReadOnlyList<Cookie> LoadCookiesFile(string filePath) =>
+        File.ReadAllLines(filePath)
+            .Select(line =>
+                line.StartsWith("#HttpOnly_", StringComparison.Ordinal) ? line[10..] : line
+            )
+            .Where(line => line.Length > 0 && !line.StartsWith('#'))
+            .Select(line => line.Split('\t'))
+            .Where(parts => parts.Length >= 7)
+            .Select(parts => new Cookie(parts[5], parts[6], parts[2], parts[0]))
+            .ToArray();
 }
