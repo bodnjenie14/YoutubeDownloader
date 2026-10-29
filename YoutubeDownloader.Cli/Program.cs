@@ -1081,19 +1081,28 @@ if (isChannelsList)
     var totalFailedCount = 0;
 
     using var youtube = new YoutubeClient();
-    foreach (var (i, channelName) in channelNames.Index())
+    foreach (var (i, channelLine) in channelNames.Index())
     {
+        // "Name > https://www.youtube.com/channel/UC..." names the channel exactly, no search
+        var linkMatch = Regex.Match(channelLine, @"^(.*?)\s*>\s*\S*/channel/(UC[\w-]{22})");
+        var channelName = linkMatch.Success ? linkMatch.Groups[1].Value.Trim() : channelLine;
+        ChannelId? linkedChannelId = null;
+        if (linkMatch.Success)
+            linkedChannelId = ChannelId.Parse(linkMatch.Groups[2].Value);
+
         var watched = historyVideos
             .Where(v =>
-                string.Equals(
-                    NormalizeName(v.Author.ChannelTitle),
-                    NormalizeName(channelName),
-                    StringComparison.OrdinalIgnoreCase
-                )
+                linkedChannelId is { } id
+                    ? v.Author.ChannelId == id
+                    : string.Equals(
+                        NormalizeName(v.Author.ChannelTitle),
+                        NormalizeName(channelName),
+                        StringComparison.OrdinalIgnoreCase
+                    )
             )
             .ToList();
 
-        var channelId = watched.FirstOrDefault()?.Author.ChannelId;
+        var channelId = linkedChannelId ?? watched.FirstOrDefault()?.Author.ChannelId;
         if (channelId is null)
         {
             var results = await youtube.Search.GetChannelsAsync(channelName).CollectAsync(5);
