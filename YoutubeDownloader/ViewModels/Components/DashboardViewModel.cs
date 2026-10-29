@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -39,6 +41,7 @@ public partial class DashboardViewModel : ViewModelBase
 
     private DateTimeOffset _cooldownUntil = DateTimeOffset.MinValue;
     private int _consecutiveFailureCount;
+    private bool _isAuthRejected;
 
     public DashboardViewModel(
         ViewModelManager viewModelManager,
@@ -174,7 +177,9 @@ public partial class DashboardViewModel : ViewModelBase
         IProgress<Percentage> progress
     )
     {
-        using var downloader = new VideoDownloader(_settingsService.LastAuthCookies);
+        using var downloader = new VideoDownloader(
+            _isAuthRejected ? null : _settingsService.LastAuthCookies
+        );
 
         using var access = await _downloadSemaphore.AcquireAsync(download.CancellationToken);
 
@@ -266,6 +271,24 @@ public partial class DashboardViewModel : ViewModelBase
                         && attempt <= _settingsService.AutoRetryLimit
                     )
                 {
+                    if (
+                        ex
+                            is HttpRequestException
+                            {
+                                StatusCode: HttpStatusCode.BadRequest
+                                    or HttpStatusCode.Unauthorized
+                                    or HttpStatusCode.Forbidden
+                            }
+                        && _settingsService.LastAuthCookies is not null
+                        && !_isAuthRejected
+                    )
+                    {
+                        _isAuthRejected = true;
+                        _snackbarManager.Notify(
+                            "YouTube rejected the saved login, downloading without it"
+                        );
+                    }
+
                     _consecutiveFailureCount++;
 
                     var cooldownUntil =

@@ -9,5 +9,6 @@
   </Folder>
 
   <Project Path="YoutubeDownloader/YoutubeDownloader.csproj" />
+  <Project Path="YoutubeDownloader.Cli/YoutubeDownloader.Cli.csproj" />
   <Project Path="YoutubeDownloader.Core/YoutubeDownloader.Core.csproj" />
 </Solution>
