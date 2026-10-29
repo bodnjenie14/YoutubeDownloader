@@ -43,7 +43,11 @@ def main():
     parser.add_argument("--profile", help="build map-<profile>.xml from the <profile>/ section only")
     args = parser.parse_args()
     root = args.root
-    sections = [args.profile] if args.profile else SECTIONS
+    sections = SECTIONS
+    if args.profile:
+        # A profile folder either holds lists directly (one section) or the usual section folders
+        nested = [f"{args.profile}/{s}" for s in SECTIONS if os.path.isdir(os.path.join(root, args.profile, s))]
+        sections = nested or [args.profile]
     map_name = f"map-{args.profile}" if args.profile else "map"
     avatars_dir = os.path.join(root, "avatars")
 
@@ -58,7 +62,7 @@ def main():
         if not os.path.isdir(section_dir):
             continue
 
-        section_element = ET.SubElement(sections_element, "Section", Name=section, Folder=section)
+        section_element = ET.SubElement(sections_element, "Section", Name=section.split("/")[-1], Folder=section)
 
         xml_paths = []
         for dirpath, _, filenames in os.walk(section_dir):
