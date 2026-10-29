@@ -132,6 +132,7 @@ for (var i = 2; i < args.Length; i++)
 }
 
 var cookies = AppSettingsCookies.TryLoad(settingsFilePath);
+var ytDlpFilePath = FindYtDlp();
 var logLock = new Lock();
 string? logFilePath = null;
 
@@ -210,6 +211,105 @@ static TimeSpan GetRetryDelay(int failureCount) =>
         4 => TimeSpan.FromMinutes(2),
         _ => TimeSpan.FromMinutes(5),
     };
+
+static bool IsCipherError(Exception ex) =>
+    ex.Message.Contains("cipher manifest", StringComparison.OrdinalIgnoreCase);
+
+static string? FindYtDlp()
+{
+    var candidates = new[]
+    {
+        AppContext.BaseDirectory,
+        Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Microsoft",
+            "WinGet",
+            "Links"
+        ),
+    }.Concat(
+        (Environment.GetEnvironmentVariable("PATH") ?? "").Split(
+            Path.PathSeparator,
+            StringSplitOptions.RemoveEmptyEntries
+        )
+    );
+
+    foreach (var dirPath in candidates)
+    {
+        var filePath = Path.Combine(dirPath, OperatingSystem.IsWindows() ? "yt-dlp.exe" : "yt-dlp");
+        if (File.Exists(filePath))
+            return filePath;
+    }
+
+    return null;
+}
+
+async Task<bool> TryDownloadWithYtDlpAsync(string videoId, string filePath)
+{
+    if (ytDlpFilePath is null || container != Container.Mp4)
+        return false;
+
+    var format = quality switch
+    {
+        VideoQualityPreference.Lowest => "wv*[ext=mp4]+ba[ext=m4a]/w[ext=mp4]/w",
+        VideoQualityPreference.UpTo360p => "bv*[height<=360][ext=mp4]+ba[ext=m4a]/b[height<=360]",
+        VideoQualityPreference.UpTo480p => "bv*[height<=480][ext=mp4]+ba[ext=m4a]/b[height<=480]",
+        VideoQualityPreference.UpTo720p => "bv*[height<=720][ext=mp4]+ba[ext=m4a]/b[height<=720]",
+        VideoQualityPreference.UpTo1080p =>
+            "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080]",
+        _ => "bv*[ext=mp4]+ba[ext=m4a]/b",
+    };
+
+    var startInfo = new ProcessStartInfo(ytDlpFilePath)
+    {
+        UseShellExecute = false,
+        CreateNoWindow = true,
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+    };
+
+    foreach (
+        var argument in new[]
+        {
+            "--no-playlist",
+            "--no-progress",
+            "--quiet",
+            "--no-warnings",
+            "--force-overwrites",
+            "-f",
+            format,
+            "--merge-output-format",
+            "mp4",
+            "-o",
+            filePath,
+        }
+    )
+        startInfo.ArgumentList.Add(argument);
+
+    if (shouldIncludeSubtitles)
+    {
+        startInfo.ArgumentList.Add("--write-subs");
+        startInfo.ArgumentList.Add("--embed-subs");
+    }
+
+    startInfo.ArgumentList.Add($"https://www.youtube.com/watch?v={videoId}");
+
+    try
+    {
+        using var process = Process.Start(startInfo)!;
+        var outputTask = process.StandardOutput.ReadToEndAsync();
+        var errorTask = process.StandardError.ReadToEndAsync();
+
+        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMinutes(30));
+        await process.WaitForExitAsync(timeoutCts.Token);
+        await Task.WhenAll(outputTask, errorTask);
+
+        return process.ExitCode == 0 && File.Exists(filePath) && new FileInfo(filePath).Length > 0;
+    }
+    catch
+    {
+        return false;
+    }
+}
 
 static void TryDelete(string filePath)
 {
@@ -377,6 +477,46 @@ async Task<int> DownloadListAsync(
 
                 return;
             }
+            catch (Exception ex) when (IsCipherError(ex) && attempt >= 3)
+            {
+                TryDelete(filePath);
+
+                if (ytDlpFilePath is not null && await TryDownloadWithYtDlpAsync(item.Id, filePath))
+                {
+                    if (shouldInjectTags && item.Video is not null)
+                    {
+                        try
+                        {
+                            await new MediaTagInjector().InjectTagsAsync(filePath, item.Video);
+                        }
+                        catch { }
+                    }
+
+                    var doneCount = Interlocked.Increment(ref completedCount);
+                    Log(
+                        $"OK    {label} (via yt-dlp, {new FileInfo(filePath).Length / 1024} KB) [{doneCount + skippedCount + failedCount}/{items.Count}]",
+                        ConsoleColor.Green
+                    );
+
+                    return;
+                }
+
+                TryDelete(filePath);
+                Interlocked.Increment(ref failedCount);
+
+                var message =
+                    $"{label} ({item.Id}): {ex.Message.Split('\n')[0]}"
+                    + (
+                        ytDlpFilePath is null
+                            ? " (install yt-dlp to download these)"
+                            : " (yt-dlp failed too)"
+                    );
+                lock (failures)
+                    failures.Add(message);
+
+                Log($"FAIL  {message}", ConsoleColor.Red);
+                return;
+            }
             catch (Exception ex)
                 when (ex is VideoUnavailableException or VideoRequiresPurchaseException
                     || attempt > retryLimit
@@ -391,6 +531,18 @@ async Task<int> DownloadListAsync(
 
                 Log($"FAIL  {message}", ConsoleColor.Red);
                 return;
+            }
+            catch (Exception ex) when (IsCipherError(ex))
+            {
+                TryDelete(filePath);
+
+                // Not throttling: specific videos YoutubeExplode can't decipher, so don't pause the queue
+                Log(
+                    $"RETRY {label} attempt {attempt}/3: {ex.Message.Split('\n')[0]}",
+                    ConsoleColor.Yellow
+                );
+
+                await Task.Delay(TimeSpan.FromSeconds(5));
             }
             catch (Exception ex)
             {
@@ -454,6 +606,79 @@ Func<string, IReadOnlyDictionary<string, string>, Task> WriteXml(
 
 var inputLines = File.Exists(input) ? File.ReadAllLines(input) : [];
 var isChannelsList = inputLines.Any(l => Regex.IsMatch(l.Trim(), @"^#\d+$"));
+var mostWatchedHeader = inputLines
+    .Select(l => l.Trim())
+    .FirstOrDefault(l =>
+        l.StartsWith("Most-Watched Videos on ", StringComparison.OrdinalIgnoreCase)
+    );
+
+static string NormalizeTitle(string title) =>
+    Regex.Replace(title.ToLowerInvariant(), @"[^\p{L}\p{N}]+", "");
+
+// Most-watched list: a channel's top uploads by title, ranked
+if (mostWatchedHeader is not null)
+{
+    var channelName = mostWatchedHeader["Most-Watched Videos on ".Length..].Trim();
+
+    // Rows look like: rank, title, "12:10 · 4 yr ago", views
+    var titles = inputLines
+        .Select((line, i) => (line: line.Trim(), i))
+        .Where(x =>
+            Regex.IsMatch(x.line, @"^\d+$")
+            && x.i + 2 < inputLines.Length
+            && inputLines[x.i + 2].Contains(" · ")
+        )
+        .Select(x => inputLines[x.i + 1].Trim())
+        .ToArray();
+
+    using var youtube = new YoutubeClient();
+
+    var channelResults = await youtube.Search.GetChannelsAsync(channelName).CollectAsync(5);
+    var channel =
+        channelResults.FirstOrDefault(c => NormalizeTitle(c.Title) == NormalizeTitle(channelName))
+        ?? channelResults.FirstOrDefault();
+
+    if (channel is null)
+    {
+        Console.WriteLine($"Channel '{channelName}' not found.");
+        return 2;
+    }
+
+    Console.WriteLine($"Reading uploads of '{channel.Title}' to match {titles.Length} titles...");
+
+    var uploads = new List<IVideo>();
+    await foreach (var upload in youtube.Channels.GetUploadsAsync(channel.Id))
+        uploads.Add(upload);
+
+    var uploadsByTitle = uploads
+        .GroupBy(v => NormalizeTitle(v.Title))
+        .ToDictionary(g => g.Key, g => g.First());
+
+    var videos = new List<IVideo>();
+    foreach (var title in titles)
+    {
+        var key = NormalizeTitle(title);
+        var video =
+            uploadsByTitle.GetValueOrDefault(key)
+            ?? uploads.FirstOrDefault(v =>
+                NormalizeTitle(v.Title).StartsWith(key, StringComparison.Ordinal)
+            );
+
+        if (video is null)
+            Console.WriteLine($"Not found among uploads: {title}");
+        else if (videos.All(v => v.Id != video.Id))
+            videos.Add(video);
+    }
+
+    var listTitle = $"{channelName} - Most Watched";
+    var failedCount = await DownloadListAsync(
+        listTitle,
+        videos.Select(v => (v.Id.Value, v.Title, (IVideo?)v)).ToArray(),
+        WriteXml(channel.Id.Value, channel.Url, listTitle, channel.Title, videos)
+    );
+
+    return failedCount > 0 ? 3 : 0;
+}
 
 // Channels list: one folder per channel with the watched videos plus the newest uploads
 if (isChannelsList)
