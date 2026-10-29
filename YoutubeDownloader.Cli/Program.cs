@@ -325,10 +325,14 @@ static void TryDelete(string filePath)
 async Task<int> DownloadListAsync(
     string title,
     IReadOnlyList<(string Id, string Title, IVideo? Video)> items,
-    Func<string, IReadOnlyDictionary<string, string>, Task>? writeXmlAsync
+    Func<string, IReadOnlyDictionary<string, string>, Task>? writeXmlAsync,
+    string? folderName = null
 )
 {
-    var outputDirPath = Path.Combine(parentDirPath, Path.EscapeFileName(title.Trim()));
+    var outputDirPath = Path.Combine(
+        parentDirPath,
+        Path.EscapeFileName((folderName ?? title).Trim())
+    );
 
     // Pick file names up front so they're stable between runs
     var usedFileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -680,6 +684,191 @@ if (mostWatchedHeader is not null)
     return failedCount > 0 ? 3 : 0;
 }
 
+// Skips live streams, very long replays and re-uploads of the same title
+async Task<IReadOnlyList<IVideo>> GetNewestUploadsAsync(
+    YoutubeClient youtube,
+    ChannelId channelId,
+    IReadOnlyList<IVideo> excluded,
+    int count
+)
+{
+    if (count <= 0)
+        return [];
+
+    var excludedIds = excluded.Select(v => v.Id.Value).ToHashSet(StringComparer.Ordinal);
+    var seenTitles = excluded.Select(v => NormalizeTitle(v.Title)).ToHashSet();
+
+    return (
+        await youtube.Channels.GetUploadsAsync(channelId).CollectAsync(count * 5 + excluded.Count)
+    )
+        .Where(v =>
+            !excludedIds.Contains(v.Id.Value)
+            && v.Duration is { } duration
+            && duration > TimeSpan.Zero
+            && duration <= TimeSpan.FromHours(3)
+            && seenTitles.Add(NormalizeTitle(v.Title))
+        )
+        .Take(count)
+        .Cast<IVideo>()
+        .ToArray();
+}
+
+async Task<IVideo?> FindChannelVideoAsync(YoutubeClient youtube, Channel channel, string title)
+{
+    var key = NormalizeTitle(title);
+
+    var results = await youtube.Search.GetVideosAsync($"{title} {channel.Title}").CollectAsync(30);
+
+    var match =
+        results.FirstOrDefault(v =>
+            v.Author.ChannelId == channel.Id && NormalizeTitle(v.Title) == key
+        )
+        ?? results.FirstOrDefault(v =>
+            v.Author.ChannelId == channel.Id
+            && (
+                NormalizeTitle(v.Title).StartsWith(key, StringComparison.Ordinal)
+                || key.StartsWith(NormalizeTitle(v.Title), StringComparison.Ordinal)
+            )
+        );
+
+    if (match is not null)
+        return match;
+
+    var scannedCount = 0;
+    await foreach (var upload in youtube.Channels.GetUploadsAsync(channel.Id))
+    {
+        if (NormalizeTitle(upload.Title) == key)
+            return upload;
+
+        if (++scannedCount >= 1000)
+            break;
+    }
+
+    return null;
+}
+
+// Top subscriptions list: each channel's most popular video and Short, added to its channel folder
+if (inputLines.Any(l => l.Trim() == "Top video"))
+{
+    var entries = new List<(string Name, string Handle, string? TopVideo, string? TopShort)>();
+    for (var i = 0; i < inputLines.Length; i++)
+    {
+        if (inputLines[i].Trim() != "Top video")
+            continue;
+
+        var handleIndex = Enumerable
+            .Range(0, i)
+            .Reverse()
+            .FirstOrDefault(j => inputLines[j].Trim().StartsWith('@'), -1);
+
+        if (handleIndex < 1)
+            continue;
+
+        var shortIndex = Enumerable
+            .Range(i, inputLines.Length - i)
+            .FirstOrDefault(j => inputLines[j].Trim() == "Top Short", -1);
+
+        var topShort =
+            shortIndex >= 0 && shortIndex + 1 < inputLines.Length
+                ? inputLines[shortIndex + 1].Trim()
+                : null;
+
+        entries.Add(
+            (
+                inputLines[handleIndex - 1].Trim(),
+                inputLines[handleIndex].Trim(),
+                i + 1 < inputLines.Length ? inputLines[i + 1].Trim() : null,
+                topShort?.StartsWith("No Shorts", StringComparison.OrdinalIgnoreCase) == true
+                    ? null
+                    : topShort
+            )
+        );
+    }
+
+    // Channel folders made earlier are recognized by the channel ID in their XML
+    var existingFolders = new Dictionary<string, string>(StringComparer.Ordinal);
+    if (Directory.Exists(parentDirPath))
+    {
+        foreach (
+            var xmlFilePath in Directory.EnumerateFiles(
+                parentDirPath,
+                "*.xml",
+                SearchOption.AllDirectories
+            )
+        )
+        {
+            try
+            {
+                if ((string?)XDocument.Load(xmlFilePath).Root?.Attribute("Id") is { } id)
+                    existingFolders.TryAdd(
+                        id,
+                        Path.GetFileName(Path.GetDirectoryName(xmlFilePath)!)
+                    );
+            }
+            catch { }
+        }
+    }
+
+    var totalFailedCount = 0;
+    using var youtube = new YoutubeClient();
+    foreach (var (i, entry) in entries.Index())
+    {
+        Channel channel;
+        try
+        {
+            channel = await youtube.Channels.GetByHandleAsync(
+                ChannelHandle.Parse($"https://www.youtube.com/{entry.Handle}")
+            );
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(
+                $"[{i + 1}/{entries.Count}] '{entry.Name}': channel not found ({ex.Message.Split('\n')[0]})"
+            );
+            continue;
+        }
+
+        var videos = new List<IVideo>();
+        foreach (var title in new[] { entry.TopVideo, entry.TopShort }.OfType<string>())
+        {
+            var video = await FindChannelVideoAsync(youtube, channel, title);
+            if (video is null)
+                Console.WriteLine($"  not found on the channel: {title}");
+            else if (videos.All(v => v.Id != video.Id))
+                videos.Add(video);
+        }
+
+        var existingFolder = existingFolders.GetValueOrDefault(channel.Id.Value);
+        if (existingFolder is null)
+            videos.AddRange(await GetNewestUploadsAsync(youtube, channel.Id, videos, extraCount));
+
+        if (videos.Count == 0)
+        {
+            Console.WriteLine($"[{i + 1}/{entries.Count}] '{entry.Name}': nothing found, skipping");
+            continue;
+        }
+
+        var listTitle = existingFolder is not null
+            ? $"{existingFolder} - Most Popular"
+            : entry.Name;
+
+        Console.WriteLine(
+            existingFolder is not null
+                ? $"[{i + 1}/{entries.Count}] '{entry.Name}': {videos.Count} most popular into existing folder '{existingFolder}'"
+                : $"[{i + 1}/{entries.Count}] '{entry.Name}': new folder with {videos.Count} videos"
+        );
+
+        totalFailedCount += await DownloadListAsync(
+            listTitle,
+            videos.Select(v => (v.Id.Value, v.Title, (IVideo?)v)).ToArray(),
+            WriteXml(channel.Id.Value, channel.Url, listTitle, channel.Title, videos),
+            existingFolder ?? entry.Name
+        );
+    }
+
+    return totalFailedCount > 0 ? 3 : 0;
+}
+
 // Channels list: one folder per channel with the watched videos plus the newest uploads
 if (isChannelsList)
 {
@@ -739,31 +928,11 @@ if (isChannelsList)
             continue;
         }
 
-        var watchedIds = watched.Select(v => v.Id.Value).ToHashSet(StringComparer.Ordinal);
-        // Skip live streams, very long replays and re-uploads of the same title
-        var seenTitles = watched.Select(v => NormalizeTitle(v.Title)).ToHashSet();
-        var extras =
-            extraCount > 0
-                ? (
-                    await youtube
-                        .Channels.GetUploadsAsync(resolvedChannelId)
-                        .CollectAsync(extraCount * 5 + watched.Count)
-                )
-                    .Where(v =>
-                        !watchedIds.Contains(v.Id.Value)
-                        && v.Duration is { } duration
-                        && duration > TimeSpan.Zero
-                        && duration <= TimeSpan.FromHours(3)
-                        && seenTitles.Add(NormalizeTitle(v.Title))
-                    )
-                    .Take(extraCount)
-                    .Cast<IVideo>()
-                    .ToArray()
-                : [];
+        var extras = await GetNewestUploadsAsync(youtube, resolvedChannelId, watched, extraCount);
 
         var videos = watched.Concat(extras).ToArray();
         Console.WriteLine(
-            $"[{i + 1}/{channelNames.Length}] '{channelName}': {watched.Count} watched + {extras.Length} newest uploads"
+            $"[{i + 1}/{channelNames.Length}] '{channelName}': {watched.Count} watched + {extras.Count} newest uploads"
         );
 
         totalFailedCount += await DownloadListAsync(
