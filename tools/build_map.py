@@ -12,16 +12,20 @@ map.xml lists every list by section, and every video once with the lists it
 appears in, so a player can link videos, lists, channels and pictures together.
 map.csv is the list overview as a spreadsheet.
 
-Usage: python build_map.py <library-root>
+A profile builds a separate map for another child's tablet from that child's own section
+folder (e.g. mantis/, filled with derive_list.py and the CLI): map-<profile>.xml/.csv.
+
+Usage: python build_map.py <library-root> [--profile NAME]
 """
 
+import argparse
 import csv
 import os
 import sys
 import time
 import xml.etree.ElementTree as ET
 
-SECTIONS = ["playlists", "channels", "history", "subscribers"]
+SECTIONS = ["playlists", "channels", "history", "subscribers", "shorts"]
 
 
 def relative(path, root):
@@ -34,16 +38,22 @@ def file_key(path):
 
 
 def main():
-    root = sys.argv[1]
+    parser = argparse.ArgumentParser()
+    parser.add_argument("root")
+    parser.add_argument("--profile", help="build map-<profile>.xml from the <profile>/ section only")
+    args = parser.parse_args()
+    root = args.root
+    sections = [args.profile] if args.profile else SECTIONS
+    map_name = f"map-{args.profile}" if args.profile else "map"
     avatars_dir = os.path.join(root, "avatars")
 
-    library = ET.Element("Library", Root=os.path.abspath(root), BuiltAt=time.strftime("%Y-%m-%dT%H:%M:%S"))
+    library = ET.Element("Library", Profile=args.profile or "", Root=os.path.abspath(root), BuiltAt=time.strftime("%Y-%m-%dT%H:%M:%S"))
     sections_element = ET.SubElement(library, "Sections")
     videos = {}
     rows = []
     stored_files = set()
 
-    for section in SECTIONS:
+    for section in sections:
         section_dir = os.path.join(root, section)
         if not os.path.isdir(section_dir):
             continue
@@ -110,6 +120,9 @@ def main():
             ET.SubElement(list_element, "Author").text = playlist.findtext("Author") or ""
             if picture:
                 ET.SubElement(list_element, "Picture").text = picture
+            # Channel banner (see banners.py)
+            if os.path.isfile(os.path.join(folder, "banner.jpg")):
+                ET.SubElement(list_element, "Banner").text = relative(os.path.join(folder, "banner.jpg"), root)
 
             rows.append([section, title, len(entries), downloaded, round(size / 1e6),
                          relative(folder, root), relative(xml_path, root), list_id, playlist.get("Url", "")])
@@ -120,6 +133,9 @@ def main():
         if video["file"]:
             attributes["File"] = video["file"]
             attributes["Bytes"] = str(os.path.getsize(os.path.join(root, video["file"])))
+        # Video picture (see thumbnails.py)
+        if os.path.isfile(os.path.join(root, "thumbs", f"{video_id}.jpg")):
+            attributes["Thumbnail"] = f"thumbs/{video_id}.jpg"
         avatar = os.path.join(avatars_dir, f"{video['channel_id']}.jpg")
         if video["channel_id"] and os.path.isfile(avatar):
             attributes["ChannelPicture"] = relative(avatar, root)
@@ -136,16 +152,16 @@ def main():
     library.set("Bytes", str(sum(os.path.getsize(os.path.join(root, v["file"])) for v in videos.values() if v["file"])))
 
     ET.indent(library)
-    ET.ElementTree(library).write(os.path.join(root, "map.xml"), encoding="utf-8", xml_declaration=True)
+    ET.ElementTree(library).write(os.path.join(root, f"{map_name}.xml"), encoding="utf-8", xml_declaration=True)
 
-    with open(os.path.join(root, "map.csv"), "w", newline="", encoding="utf-8-sig") as f:
+    with open(os.path.join(root, f"{map_name}.csv"), "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f)
         writer.writerow(["Section", "List", "Videos", "Downloaded", "Size (MB)", "Folder", "XML", "YouTube ID", "Link"])
         writer.writerows(rows)
 
     print(f"{len(rows)} lists, {len(videos)} unique videos "
           f"({sum(1 for v in videos.values() if v['file'])} downloaded, {len(stored_files)} files stored) "
-          f"-> {os.path.join(root, 'map.xml')}, map.csv")
+          f"-> {os.path.join(root, map_name + '.xml')}, {map_name}.csv")
 
 
 if __name__ == "__main__":

@@ -22,7 +22,7 @@ import sys
 import time
 
 
-SECTIONS = ["playlists", "channels", "history", "subscribers"]
+SECTIONS = ["playlists", "channels", "history", "subscribers", "shorts"]
 
 
 def unique_bytes(root):
@@ -47,16 +47,23 @@ def ratio_from_finalize_log(root):
     if not os.path.isfile(path):
         return None
     text = open(path, encoding="utf-8").read()
-    totals = re.findall(r"\d+ videos, \d+ files, ([\d.]+) GB", text)
-    progress = re.findall(r"compression ([\d.]+) GB, duplicates ([\d.]+) GB", text)
-    if not totals or not progress:
-        return None
-    total, (compression, duplicates) = float(totals[-1]), progress[-1]
-    raw_unique = total - float(duplicates)
-    return (raw_unique - float(compression)) / raw_unique if raw_unique > 0 else None
+    # Each run starts with a totals line. Later runs mostly skip videos compressed earlier,
+    # which makes their ratio look close to 1, so use the run that compressed the most
+    ratios = []
+    for run in re.split(r"(?m)^(?=\S+ \d+ videos, \d+ files, )", text):
+        totals = re.findall(r"\d+ videos, \d+ files, ([\d.]+) GB", run)
+        progress = re.findall(r"compression ([\d.]+) GB, duplicates ([\d.]+) GB", run)
+        if not totals or not progress or float(progress[-1][0]) == 0:
+            continue
+        total, (compression, duplicates) = float(totals[-1]), progress[-1]
+        raw_unique = total - float(duplicates)
+        if raw_unique > 0:
+            ratios.append((raw_unique - float(compression)) / raw_unique)
+    return min(ratios, default=None)
 
 
 def main():
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser()
     parser.add_argument("root")
     parser.add_argument("playlists")
