@@ -62,7 +62,12 @@ public static class PlaylistXmlWriter
                                 new XAttribute("Position", i + 1),
                                 new XAttribute("Id", video.Id.Value),
                                 new XElement("Title", video.Title),
-                                new XElement("Author", video.Author.ChannelTitle),
+                                new XElement(
+                                    "Author",
+                                    new XAttribute("ChannelId", video.Author.ChannelId.Value),
+                                    new XAttribute("ChannelUrl", video.Author.ChannelUrl),
+                                    video.Author.ChannelTitle
+                                ),
                                 new XElement("Duration", video.Duration?.ToString() ?? ""),
                                 new XElement("Url", video.Url),
                                 videoFilePaths?.TryGetValue(video.Id.Value, out var videoFilePath)
