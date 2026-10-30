@@ -68,13 +68,25 @@ def main():
         for dirpath, _, filenames in os.walk(section_dir):
             xml_paths += [os.path.join(dirpath, f) for f in filenames if f.lower().endswith(".xml")]
 
+        playlists = []
         for xml_path in sorted(xml_paths, key=str.lower):
             try:
                 playlist = ET.parse(xml_path).getroot()
             except ET.ParseError:
                 continue
-            if playlist.tag != "Playlist":
-                continue
+            if playlist.tag == "Playlist":
+                playlists.append((xml_path, playlist))
+
+        # <section>/order.txt (list IDs, one per line) gives the display order, e.g. the order
+        # on YouTube; lists not in it follow alphabetically
+        order_path = os.path.join(section_dir, "order.txt")
+        if os.path.isfile(order_path):
+            order = {}
+            for line in open(order_path, encoding="utf-8"):
+                order.setdefault(line.strip(), len(order))
+            playlists.sort(key=lambda p: order.get(p[1].get("Id", ""), len(order)))
+
+        for xml_path, playlist in playlists:
 
             folder = os.path.dirname(xml_path)
             list_id = playlist.get("Id", "")
