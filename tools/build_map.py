@@ -15,6 +15,9 @@ map.csv is the list overview as a spreadsheet.
 A profile builds a separate map for another child's tablet from that child's own section
 folder (e.g. mantis/, filled with derive_list.py and the CLI): map-<profile>.xml/.csv.
 
+<map name>-exclude.txt (e.g. map-exclude.txt) lists video IDs, one per line, that were swapped
+off that map and must stay off it after a rebuild. Their files and list XMLs are kept.
+
 Usage: python build_map.py <library-root> [--profile NAME]
 """
 
@@ -51,6 +54,12 @@ def main():
         sections = ([args.profile] if direct or not nested else []) + nested
     map_name = f"map-{args.profile}" if args.profile else "map"
     avatars_dir = os.path.join(root, "avatars")
+
+    excluded = set()
+    exclude_path = os.path.join(root, f"{map_name}-exclude.txt")
+    if os.path.isfile(exclude_path):
+        with open(exclude_path, encoding="utf-8") as f:
+            excluded = {line.strip() for line in f if line.strip()}
 
     library = ET.Element("Library", Profile=args.profile or "", Root=os.path.abspath(root), BuiltAt=time.strftime("%Y-%m-%dT%H:%M:%S"))
     sections_element = ET.SubElement(library, "Sections")
@@ -94,7 +103,7 @@ def main():
             folder = os.path.dirname(xml_path)
             list_id = playlist.get("Id", "")
             title = playlist.findtext("Title") or os.path.splitext(os.path.basename(xml_path))[0]
-            entries = list(playlist.iter("Video"))
+            entries = [v for v in playlist.iter("Video") if v.get("Id") not in excluded]
 
             downloaded = 0
             size = 0
