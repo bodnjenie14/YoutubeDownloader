@@ -30,6 +30,9 @@ FFMPEG_ARGS = [
     "-movflags", "+faststart",
 ]
 
+# Profiles encoded at their own quality (see recompress_profile.py): never linked to other copies
+SEPARATE_PROFILES = {"mantis"}
+
 log_lock = threading.Lock()
 
 
@@ -60,9 +63,11 @@ def probe(path):
 
 
 def collect(root):
-    """Video ID -> list of existing, non-empty file paths."""
+    """(Separate profile or "", video ID) -> list of existing, non-empty file paths."""
     by_id = {}
     for dirpath, _, filenames in os.walk(root):
+        top_folder = os.path.relpath(dirpath, root).split(os.sep)[0]
+        group = top_folder if top_folder in SEPARATE_PROFILES else ""
         for name in filenames:
             if not name.lower().endswith(".xml"):
                 continue
@@ -77,7 +82,7 @@ def collect(root):
                     continue
                 path = os.path.join(dirpath, file_name)
                 if os.path.isfile(path) and os.path.getsize(path) > 0:
-                    paths = by_id.setdefault(video_id, [])
+                    paths = by_id.setdefault((group, video_id), [])
                     if not any(os.path.normcase(p) == os.path.normcase(path) for p in paths):
                         paths.append(path)
     return by_id
