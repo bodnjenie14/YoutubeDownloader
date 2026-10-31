@@ -47,7 +47,8 @@ def main():
     if args.profile:
         # A profile folder either holds lists directly (one section) or the usual section folders
         nested = [f"{args.profile}/{s}" for s in SECTIONS if os.path.isdir(os.path.join(root, args.profile, s))]
-        sections = nested or [args.profile]
+        direct = any(d.is_dir() and d.name not in SECTIONS for d in os.scandir(os.path.join(root, args.profile)))
+        sections = ([args.profile] if direct or not nested else []) + nested
     map_name = f"map-{args.profile}" if args.profile else "map"
     avatars_dir = os.path.join(root, "avatars")
 
@@ -65,7 +66,9 @@ def main():
         section_element = ET.SubElement(sections_element, "Section", Name=section.split("/")[-1], Folder=section)
 
         xml_paths = []
-        for dirpath, _, filenames in os.walk(section_dir):
+        for dirpath, dirnames, filenames in os.walk(section_dir):
+            if section == args.profile:
+                dirnames[:] = [d for d in dirnames if d not in SECTIONS]  # they're sections of their own
             xml_paths += [os.path.join(dirpath, f) for f in filenames if f.lower().endswith(".xml")]
 
         playlists = []
